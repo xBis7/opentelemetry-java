@@ -587,6 +587,14 @@ final class SdkSpan implements ReadWriteSpan {
   }
 
   @Override
+  public void setEndEpochNanosForPeriodicExport() {
+    synchronized (lock) {
+      this.endEpochNanos = clock.now();
+      hasEnded = EndState.NOT_ENDED;
+    }
+  }
+
+  @Override
   public boolean isRecording() {
     synchronized (lock) {
       return hasEnded != EndState.ENDED;

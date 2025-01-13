@@ -445,6 +445,8 @@ public interface Span extends ImplicitContextKeyed {
     end(SECONDS.toNanos(timestamp.getEpochSecond()) + timestamp.getNano(), NANOSECONDS);
   }
 
+  default void setEndEpochNanosForPeriodicExport() { }
+
   /**
    * Returns the {@code SpanContext} associated with this {@code Span}.
    *

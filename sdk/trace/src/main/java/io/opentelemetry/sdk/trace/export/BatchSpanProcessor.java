@@ -22,9 +22,11 @@ import io.opentelemetry.sdk.trace.internal.JcTools;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -90,17 +92,20 @@ public final class BatchSpanProcessor implements SpanProcessor {
   }
 
   @Override
-  public void onStart(Context parentContext, ReadWriteSpan span) {}
+  public void onStart(Context parentContext, ReadWriteSpan span) {
+    worker.addRunningSpanToTheMap(span);
+  }
 
   @Override
   public boolean isStartRequired() {
-    return false;
+    return true;
   }
 
   @Override
   public void onEnd(ReadableSpan span) {
     if (span != null && (exportUnsampledSpans || span.getSpanContext().isSampled())) {
       worker.addSpan(span);
+      worker.removeRunningSpanFromTheMap(span.getSpanContext().getSpanId());
     }
   }
 
@@ -184,6 +189,7 @@ public final class BatchSpanProcessor implements SpanProcessor {
     private final AtomicReference<CompletableResultCode> flushRequested = new AtomicReference<>();
     private volatile boolean continueWork = true;
     private final ArrayList<SpanData> batch;
+    private final Map<String, ReadWriteSpan> runningSpans = new ConcurrentHashMap<>();
 
     private Worker(
         SpanExporter spanExporter,
@@ -243,6 +249,18 @@ public final class BatchSpanProcessor implements SpanProcessor {
       }
     }
 
+    private void addRunningSpanToTheMap(ReadWriteSpan span) {
+      this.runningSpans.put(span.getSpanContext().getSpanId(), span);
+    }
+
+    private void removeRunningSpanFromTheMap(String spanId) {
+      this.runningSpans.remove(spanId);
+    }
+
+    private boolean batchContainsSpanId(String spanId) {
+      return batch.stream().anyMatch(sd -> sd.getSpanId().equals(spanId));
+    }
+
     @Override
     public void run() {
       updateNextExportTime();
@@ -253,6 +271,14 @@ public final class BatchSpanProcessor implements SpanProcessor {
         }
         JcTools.drain(
             queue, maxExportBatchSize - batch.size(), span -> batch.add(span.toSpanData()));
+
+        for (ReadWriteSpan span : this.runningSpans.values()) {
+          span.setEndEpochNanosForPeriodicExport();
+          SpanData data = span.toSpanData();
+          if (!batchContainsSpanId(data.getSpanId())) {
+            batch.add(data);
+          }
+        }
 
         if (batch.size() >= maxExportBatchSize || System.nanoTime() >= nextExportTime) {
           exportCurrentBatch();
